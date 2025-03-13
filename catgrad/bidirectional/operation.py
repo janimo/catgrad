@@ -1,3 +1,4 @@
+import math
 import numpy as np
 from dataclasses import dataclass
 from abc import abstractmethod
@@ -382,6 +383,74 @@ class Tanh(Definition, Lens):
 
 tanh = canonical(lambda T: op(Tanh(T)))
 
+@dataclass(frozen=True)
+class GELU(Definition, Lens):
+    T: NdArrayType
+    def source(self): return obj(self.T)
+    def target(self): return obj(self.T)
+
+    def __post_init__(self):
+        if not self.T.dtype.is_floating():
+            raise ValueError("GELU is not defined for non-floating-point dtypes")
+
+    ########################################
+    # Approximated GELU as a Core definition
+    # equivalent to torch.nn.GELU(approximate='tanh')
+
+    # The definition of the GELU function in terms of Core ops
+    # GELU(x) ≈ 0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
+    #
+    def arrow(self):
+        T = self.T
+        half = op(ops.Constant(T, 0.5))
+        one = op(ops.Constant(T, 1))
+        alpha = op(ops.Constant(T, math.sqrt(2/math.pi)))
+        beta = op(ops.Constant(T, 0.044715))
+        three = op(ops.Constant(T, 3))
+
+        #x^3
+        exp = (identity(obj(T)) @ three) >> op(ops.Power(T))
+
+        # 0.044715 * x^3
+        app = (exp @ beta) >> op(ops.Multiply(T))
+
+        # x + 0.044715 * x^3
+        app = op(ops.Copy(T)) >> (app @ identity(obj(T))) >> op(ops.Add(T))
+
+        # tanh(sqrt(2/pi) * (x + 0.044715 * x^3))
+        app = (alpha @ app) >> op(ops.Multiply(T)) >> tanh(obj(T))
+
+        # 1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3))
+        app = (one @ app) >> op(ops.Add(T))
+
+        # x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+        app = op(ops.Copy(T)) >> (app @ identity(obj(T))) >> op(ops.Multiply(T))
+
+        # 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+        app = (app @ half) >> op(ops.Multiply(T))
+
+        return app
+    ########################################
+    # GELU as an Optic
+
+    # we want this to appear as a Definition in core, so we just return the op
+    # as a singleton diagram.
+    def to_core(self):
+        return op(self)
+
+    # The forward map is like Lens, but we copy the *output*, not the input.
+    def fwd(self):
+        return op(self) >> copy(self.source())
+
+    # The reverse map is very complicated, this is a placeholder
+    # FIXME
+    def rev(self):
+        T = obj(self.T)
+        return (identity(T) @ scale(1)(T)) >> add(T)
+
+
+
+gelu = canonical(lambda T: op(GELU(T)))
 def relu(X):
     return copy(X) >> (gt_constant(0)(X) @ identity(X)) >> multiply(X)
 
